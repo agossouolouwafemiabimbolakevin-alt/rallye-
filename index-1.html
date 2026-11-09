@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rallye Poussière</title>
+<style>
+:root{--bg:#1d2a1f;--ink:#f3e9d2;--accent:#ff8a1f;--panel:rgba(20,26,20,.72);color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:"Trebuchet MS",Verdana,sans-serif;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+body{display:flex;flex-direction:column}
+#stage{position:relative;flex:1;min-height:0}
+canvas{position:absolute;inset:0;width:100%;height:100%}
+#hud{position:absolute;top:8px;left:8px;right:8px;display:flex;justify-content:space-between;gap:8px;pointer-events:none}
+#hud div{background:var(--panel);padding:6px 10px;border-radius:8px;font-size:14px;line-height:1.3}
+#hud b{font-size:20px;color:var(--accent)}
+.pad{position:absolute;bottom:10px;display:flex;gap:10px}
+#padL{left:10px}#padR{right:10px}
+.pad button{width:68px;height:68px;border-radius:50%;border:2px solid var(--ink);background:var(--panel);color:var(--ink);font-size:24px;font-weight:700}
+.pad button.on{background:var(--accent);color:#1d2a1f}
+#msg{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(15,20,15,.82);text-align:center;padding:20px}
+#msg h1{font-size:34px;margin:0 0 8px;color:var(--accent)}
+#msg p{max-width:340px;margin:4px 0 16px;line-height:1.4}
+#go{background:var(--accent);color:#1d2a1f;border:0;border-radius:10px;padding:14px 34px;font-size:18px;font-weight:700}
+#links{text-align:center;font-size:12px;padding:6px;background:#141a14}#links a{color:#ffb866}#ad{height:60px;background:#141a14;display:flex;align-items:center;justify-content:center;font-size:12px;opacity:.7}
+</style>
+</head>
+<body>
+<div id="stage">
+<canvas id="c"></canvas>
+<div id="hud"><div>Tour <b id="lap">0</b></div><div>Temps <b id="t">0.0</b> s</div><div>Record <b id="best">--</b></div><div><b id="spd">0</b> km/h</div></div>
+<div class="pad" id="padL"><button data-k="left">◀</button><button data-k="right">▶</button></div>
+<div class="pad" id="padR"><button data-k="brake">▼</button><button data-k="drift">≈</button><button data-k="gas">▲</button></div>
+<div id="msg"><h1>Rallye Poussière</h1><p>Faites le plus de tours possible. Accélérez, dérapez dans les virages et restez sur la piste : l’herbe vous ralentit.</p><p>Clavier : flèches ou WASD, espace pour déraper.</p><button id="go">Jouer</button></div>
+</div>
+<!-- Espace publicitaire : collez ici le code de votre bloc Google AdSense une fois votre site approuvé -->
+<div id="ad"><span>Espace publicitaire</span></div>
+<div id="links"><a href="a-propos.html">À propos</a> · <a href="contact.html">Contact</a> · <a href="confidentialite.html">Confidentialité</a></div>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+let W,H;function fit(){const r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;W=r.width;H=r.height;cv.width=W*d;cv.height=H*d;ctx.setTransform(d,0,0,d,0,0)}
+addEventListener('resize',fit);fit();
+// piste (spline de Catmull-Rom fermée)
+const ctl=[[0,0],[500,-150],[1000,-50],[1250,350],[1000,700],[1100,1100],[600,1350],[100,1100],[-100,700],[-500,500],[-600,100],[-350,-200]];
+const P=[];for(let i=0;i<ctl.length;i++){const p0=ctl[(i+11)%12],p1=ctl[i],p2=ctl[(i+1)%12],p3=ctl[(i+2)%12];
+for(let s=0;s<20;s++){const t=s/20,t2=t*t,t3=t2*t;P.push([0,1].map(k=>.5*((2*p1[k])+(-p0[k]+p2[k])*t+(2*p0[k]-5*p1[k]+4*p2[k]-p3[k])*t2+(-p0[k]+3*p1[k]-3*p2[k]+p3[k])*t3)))}}
+const HALF=72,N=P.length;
+function onTrack(x,y){for(let i=0;i<N;i++){const dx=P[i][0]-x,dy=P[i][1]-y;if(dx*dx+dy*dy<HALF*HALF)return true}return false}
+const car={x:P[0][0],y:P[0][1],a:Math.atan2(P[1][1]-P[0][1],P[1][0]-P[0][0]),vx:0,vy:0};
+const K={},trail=[];let running=false,lap=0,t0=0,best=null,next=1,cam={x:car.x,y:car.y};
+const el=id=>document.getElementById(id);
+addEventListener('keydown',e=>{K[e.code]=1;if(e.code=='Space')e.preventDefault()});addEventListener('keyup',e=>{K[e.code]=0});
+const T={};document.querySelectorAll('.pad button').forEach(b=>{const k=b.dataset.k;
+const on=e=>{e.preventDefault();T[k]=1;b.classList.add('on')},off=e=>{e.preventDefault();T[k]=0;b.classList.remove('on')};
+b.addEventListener('pointerdown',on);b.addEventListener('pointerup',off);b.addEventListener('pointercancel',off);b.addEventListener('pointerleave',off)});
+el('go').onclick=()=>{el('msg').style.display='none';running=true;t0=performance.now();lap=0;next=1;
+Object.assign(car,{x:P[0][0],y:P[0][1],a:Math.atan2(P[1][1]-P[0][1],P[1][0]-P[0][0]),vx:0,vy:0});trail.length=0};
+function step(dt){
+const gas=K.ArrowUp||K.KeyW||T.gas,brk=K.ArrowDown||K.KeyS||T.brake,L=K.ArrowLeft||K.KeyA||T.left,R=K.ArrowRight||K.KeyD||T.right,hand=K.Space||T.drift;
+const fx=Math.cos(car.a),fy=Math.sin(car.a),rx=-fy,ry=fx;
+let vf=car.vx*fx+car.vy*fy,vl=car.vx*rx+car.vy*ry;
+const on=onTrack(car.x,car.y),mx=on?430:170;
+if(gas)vf+=420*dt*Math.max(0,1-vf/mx);
+if(brk)vf=Math.max(-120,vf-650*dt);
+vf*=1-(on?.35:2.4)*dt; if(vf>mx)vf-=(vf-mx)*3*dt;
+vl*=Math.exp(-(hand?1.1:(on?5.5:3))*dt);
+car.a+=((R?1:0)-(L?1:0))*2.7*dt*Math.min(1,Math.abs(vf)/140)*(vf<0?-1:1);
+const nx=Math.cos(car.a),ny=Math.sin(car.a);
+car.vx=nx*vf+(-ny)*vl;car.vy=ny*vf+nx*vl;
+car.x+=car.vx*dt;car.y+=car.vy*dt;
+if(Math.abs(vl)>70){trail.push([car.x-nx*10,car.y-ny*10]);if(trail.length>260)trail.shift()}
+// points de passage
+const c=P[next*30%N],dx=c[0]-car.x,dy=c[1]-car.y;
+if(dx*dx+dy*dy<130*130){if(next===0){lap++;const tl=(performance.now()-t0)/1000;if(best===null||tl<best){best=tl;el('best').textContent=best.toFixed(1)+' s'}t0=performance.now();el('lap').textContent=lap}next=(next+1)%8}
+el('spd').textContent=Math.round(Math.abs(vf)*.35);
+if(running)el('t').textContent=((performance.now()-t0)/1000).toFixed(1);
+cam.x+=(car.x+car.vx*.25-cam.x)*Math.min(1,6*dt);cam.y+=(car.y+car.vy*.25-cam.y)*Math.min(1,6*dt);
+}
+function path(){ctx.beginPath();P.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath()}
+function draw(){
+ctx.fillStyle='#3d5a2a';ctx.fillRect(0,0,W,H);
+ctx.save();ctx.translate(W/2-cam.x,H/2-cam.y);
+ctx.lineJoin='round';
+path();ctx.strokeStyle='#e8dcc0';ctx.lineWidth=HALF*2+14;ctx.stroke();
+path();ctx.strokeStyle='#b5875a';ctx.lineWidth=HALF*2;ctx.stroke();
+path();ctx.strokeStyle='rgba(243,233,210,.35)';ctx.lineWidth=4;ctx.setLineDash([26,30]);ctx.stroke();ctx.setLineDash([]);
+// ligne de départ
+const a=Math.atan2(P[1][1]-P[0][1],P[1][0]-P[0][0]);ctx.save();ctx.translate(P[0][0],P[0][1]);ctx.rotate(a);
+for(let i=0;i<8;i++){ctx.fillStyle=i%2?'#fff':'#111';ctx.fillRect(-6,-HALF+i*18,12,18)}ctx.restore();
+// traces de dérapage
+ctx.strokeStyle='rgba(40,25,15,.45)';ctx.lineWidth=5;ctx.lineCap='round';ctx.beginPath();trail.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.stroke();
+// voiture
+ctx.translate(car.x,car.y);ctx.rotate(car.a);
+ctx.fillStyle='rgba(0,0,0,.3)';ctx.fillRect(-20,-12,44,28);
+ctx.fillStyle='#e8431f';ctx.fillRect(-22,-13,44,26);
+ctx.fillStyle='#f3e9d2';ctx.fillRect(-22,-3,44,6);
+ctx.fillStyle='#1d2a1f';ctx.fillRect(-4,-10,12,20);
+ctx.fillStyle='#ffd34d';ctx.fillRect(18,-11,4,6);ctx.fillRect(18,5,4,6);
+ctx.restore();
+}
+let last=performance.now();
+(function loop(n){const dt=Math.min(.033,(n-last)/1000);last=n;if(running)step(dt);draw();requestAnimationFrame(loop)})(last);
+</script>
+</body>
+</html>
